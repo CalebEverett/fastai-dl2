@@ -67,8 +67,8 @@ def get_sample(df,n):
 
     >>> get_sample(df, 2)
        col1 col2
-    2     3    a
     1     2    b
+    2     3    a
     """
     idxs = sorted(np.random.permutation(len(df))[:n])
     return df.iloc[idxs].copy()
@@ -188,7 +188,7 @@ def apply_cats(df, trn):
 
            col1 col2
         0     1    b
-        1     2    b
+        1     2    a
         2     3    a
 
     now the type of col is category {a : 1, b : 2}
@@ -256,10 +256,10 @@ def fix_missing(df, col, name, na_dict):
 
     >>> fix_missing(df, df['col1'], 'col1', {'col1' : 500})
     >>> df
-       col1 col2
-    0     1    5
-    1   500    2
-    2     3    2
+       col1 col2 col1_na
+    0     1    5   False
+    1   500    2    True
+    2     3    2   False
     """
     if is_numeric_dtype(col):
         if pd.isnull(col).sum() or (name in na_dict):
@@ -324,7 +324,7 @@ def scale_vars(df, mapper):
     df[mapper.transformed_names_] = mapper.transform(df)
     return mapper
 
-def proc_df(df, y_fld, skip_flds=None, do_scale=False, na_dict=None,
+def proc_df(df, y_fld=None, skip_flds=None, do_scale=False, na_dict=None,
             preproc_fn=None, max_n_cat=None, subset=None, mapper=None):
 
     """ proc_df takes a data frame df and splits off the response variable, and
@@ -419,8 +419,12 @@ def proc_df(df, y_fld, skip_flds=None, do_scale=False, na_dict=None,
     if subset: df = get_sample(df,subset)
     df = df.copy()
     if preproc_fn: preproc_fn(df)
-    y = df[y_fld].values
-    df.drop(skip_flds+[y_fld], axis=1, inplace=True)
+    if y_fld is None: y = None
+    else:
+        numericalize(df, df[y_fld], y_fld, None)
+        y = df[y_fld].values
+        skip_flds += [y_fld]
+    df.drop(skip_flds, axis=1, inplace=True)
 
     if na_dict is None: na_dict = {}
     for n,c in df.items(): na_dict = fix_missing(df, c, n, na_dict)
@@ -457,4 +461,3 @@ def get_nn_mappers(df, cat_vars, contin_vars):
     cat_maps = [(o, LabelEncoder()) for o in cat_vars]
     contin_maps = [([o], StandardScaler()) for o in contin_vars]
     return DataFrameMapper(cat_maps).fit(df), DataFrameMapper(contin_maps).fit(df)
-

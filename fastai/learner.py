@@ -12,14 +12,6 @@ from .losses import *
 import time
 
 
-class BasicModel():
-    def __init__(self,model,name='unnamed'): self.model,self.name = model,name
-    def get_layer_groups(self, do_fc=False): return children(self.model)
-
-class SingleModel(BasicModel):
-    def get_layer_groups(self): return [self.model]
-
-
 class Learner():
     def __init__(self, data, models, opt_fn=None, tmp_name='tmp', models_name='models', metrics=None, clip=None):
         self.data_,self.models,self.metrics = data,models,metrics
@@ -31,11 +23,11 @@ class Learner():
         self.models_path = os.path.join(self.data.path, models_name)
         os.makedirs(self.tmp_path, exist_ok=True)
         os.makedirs(self.models_path, exist_ok=True)
-        self.crit,self.reg_fn,self.crit = None,None,None
+        self.crit,self.reg_fn = None,None
 
     @classmethod
-    def from_model_data(cls, m, data):
-        self = cls(data, BasicModel(to_gpu(m)))
+    def from_model_data(cls, m, data, **kwargs):
+        self = cls(data, BasicModel(to_gpu(m)), **kwargs)
         self.unfreeze()
         return self
 
@@ -80,8 +72,9 @@ class Learner():
     def save_cycle(self, name, cycle): self.save(f'{name}_cyc_{cycle}')
     def load_cycle(self, name, cycle): self.load(f'{name}_cyc_{cycle}')
 
-    def fit_gen(self, model, data, layer_opt, n_cycle, cycle_len=None, cycle_mult=1, cycle_save_name=None,
-                metrics=None, callbacks=None, use_wd_sched=False, norm_wds=False, wds_sched_mult=None, **kwargs):
+    def fit_gen(self, model, data, layer_opt, n_cycle, cycle_len=None, cycle_mult=1, cycle_save_name=None, best_save_name=None,
+                use_clr=None, metrics=None, callbacks=None, use_wd_sched=False, norm_wds=False, wds_sched_mult=None, **kwargs):
+
         """Method does some preparation before finally delegating to the 'fit' method for
         fitting the model. Namely, if cycle_len is defined, it adds a 'Cosine Annealing'
         scheduler for varying the learning rate across iterations.
@@ -108,6 +101,8 @@ class Learner():
                 https://github.com/fastai/fastai/blob/master/courses/dl1/lesson1.ipynb
 
             cycle_save_name (str): use to save the weights at end of each cycle
+
+            best_save_name (str): use to save weights of best model during training.
 
             metrics (function): some function for evaluating a desired metric. Eg. accuracy.
 
@@ -148,15 +143,21 @@ class Learner():
                                                 norm_wds, wds_sched_mult)
             callbacks += [self.wd_sched]
 
-        if cycle_len:
+        elif use_clr is not None:
+            clr_div,cut_div = use_clr
+            cycle_end = self.get_cycle_end(cycle_save_name)
+            self.sched = CircularLR(layer_opt, len(data.trn_dl)*cycle_len, on_cycle_end=cycle_end, div=clr_div, cut_div=cut_div)
+        elif cycle_len:
             cycle_end = self.get_cycle_end(cycle_save_name)
             cycle_batches = len(data.trn_dl)*cycle_len
             self.sched = CosAnneal(layer_opt, cycle_batches, on_cycle_end=cycle_end, cycle_mult=cycle_mult)
         elif not self.sched: self.sched=LossRecorder(layer_opt)
         callbacks+=[self.sched]
-        for cb in callbacks: cb.on_train_begin()
+
+        if best_save_name is not None:
+            callbacks+=[SaveBestModel(self, layer_opt, metrics, best_save_name)]
         n_epoch = sum_geom(cycle_len if cycle_len else 1, cycle_mult, n_cycle)
-        fit(model, data, n_epoch, layer_opt.opt, self.crit,
+        return fit(model, data, n_epoch, layer_opt.opt, self.crit,
             metrics=metrics, callbacks=callbacks, reg_fn=self.reg_fn, clip=self.clip, **kwargs)
 
     def get_layer_groups(self): return self.models.get_layer_groups()
@@ -210,14 +211,14 @@ class Learner():
         """
         self.sched = None
         layer_opt = self.get_layer_opt(lrs, wds)
-        self.fit_gen(self.model, self.data, layer_opt, n_cycle, **kwargs)
+        return self.fit_gen(self.model, self.data, layer_opt, n_cycle, **kwargs)
 
-    def warm_up(self, start_lr=1e-5, end_lr=10, wds=None):
-        layer_opt = self.get_layer_opt(start_lr, wds)
-        self.sched = LR_Finder(layer_opt, len(self.data.trn_dl), end_lr)
-        self.fit_gen(self.model, self.data, layer_opt, 1)
+    def warm_up(self, lr, wds=None):
+        layer_opt = self.get_layer_opt(lr/4, wds)
+        self.sched = LR_Finder(layer_opt, len(self.data.trn_dl), lr, linear=True)
+        return self.fit_gen(self.model, self.data, layer_opt, 1)
 
-    def lr_find(self, start_lr=1e-5, end_lr=10, wds=None):
+    def lr_find(self, start_lr=1e-5, end_lr=10, wds=None, linear=False):
         """Helps you find an optimal learning rate for a model.
 
          It uses the technique developed in the 2015 paper
@@ -252,18 +253,23 @@ class Learner():
         """
         self.save('tmp')
         layer_opt = self.get_layer_opt(start_lr, wds)
-        self.sched = LR_Finder(layer_opt, len(self.data.trn_dl), end_lr)
+        self.sched = LR_Finder(layer_opt, len(self.data.trn_dl), end_lr, linear=linear)
         self.fit_gen(self.model, self.data, layer_opt, 1)
         self.load('tmp')
 
-    def predict(self, is_test=False): return self.predict_with_targs(is_test)[0]
+    def predict(self, is_test=False):
+        dl = self.data.test_dl if is_test else self.data.val_dl
+        return predict(self.model, dl)
 
     def predict_with_targs(self, is_test=False):
         dl = self.data.test_dl if is_test else self.data.val_dl
         return predict_with_targs(self.model, dl)
 
     def predict_dl(self, dl): return predict_with_targs(self.model, dl)[0]
-    def predict_array(self, arr): return to_np(self.model(V(T(arr).cuda())))
+
+    def predict_array(self, arr):
+        self.model.eval()
+        return to_np(self.model(V(T(arr).cuda())))
 
     def TTA(self, n_aug=4, is_test=False):
         """ Predict with Test Time Augmentation (TTA)
