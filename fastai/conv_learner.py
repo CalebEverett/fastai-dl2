@@ -36,7 +36,8 @@ class ConvnetBuilder():
         else: cut,self.lr_cut = 0,0
         cut-=xtra_cut
         layers = cut_model(f(True), cut)
-        self.nf = model_features[f] if f in model_features else (num_features(layers)*2)
+        
+#         self.nf = model_features[f] if f in model_features else (num_features(layers)*2)
         if not custom_head: layers += [AdaptiveConcatPool2d(), Flatten()]
         self.top_model = nn.Sequential(*layers)
 
@@ -62,7 +63,8 @@ class ConvnetBuilder():
 
     def get_fc_layers(self):
         res=[]
-        ni=self.nf
+#         ni=self.nf
+        ni=0
         for i,nf in enumerate(self.xtra_fc):
             res += self.create_fc_layer(ni, nf, p=self.ps[i], actn=nn.ReLU())
             ni=nf

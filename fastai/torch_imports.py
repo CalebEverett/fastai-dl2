@@ -18,6 +18,8 @@ from .models.inceptionresnetv2 import InceptionResnetV2
 from .models.inceptionv4 import InceptionV4
 from .models.nasnet import nasnetalarge
 
+from unet_models import unet11
+
 import warnings
 warnings.filterwarnings('ignore', message='Implicit dimension choice', category=UserWarning)
 
@@ -89,3 +91,7 @@ def vgg16(pre): return children(vgg16_bn(pre))[0]
 @_fastai_model('Vgg-19 with batch norm added', 'Very Deep Convolutional Networks for Large-Scale Image Recognition',
                'https://arxiv.org/pdf/1409.1556.pdf')
 def vgg19(pre): return children(vgg19_bn(pre))[0]
+
+@_fastai_model('Vgg-11 with U-Net', 'TernausNet: U-Net with VGG11 Encoder Pre-Trained on ImageNet for Image Segmentation',
+               'https://arxiv.org/pdf/1801.05746.pdf')
+def ternausnet(pre): return children(unet11(pre))
